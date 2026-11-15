@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+uploads/assets/*
+!uploads/assets/.gitkeep
+uploads/qrcodes/*
+!uploads/qrcodes/.gitkeep
+coverage/
+*.log

@@ -1,0 +1,454 @@
+// This is your Prisma schema file — the single source of truth for the database.
+// Learn more about it at https://pris.ly/d/prisma-schema
+//
+// Run `npx prisma migrate dev --name init` after editing to generate a migration.
+// Run `npx prisma generate` to regenerate the Prisma Client.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  ADMIN
+  TECHNICIAN
+  REQUESTER
+}
+
+enum LocationType {
+  CAMPUS
+  BUILDING
+  FLOOR
+  ROOM
+}
+
+enum AssetStatus {
+  ACTIVE
+  UNDER_MAINTENANCE
+  RETIRED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum WorkOrderStatus {
+  OPEN
+  ASSIGNED
+  IN_PROGRESS
+  ON_HOLD
+  COMPLETED
+  CLOSED
+}
+
+enum NotificationType {
+  ASSIGNMENT
+  STATUS_CHANGE
+  OVERDUE
+  LOW_STOCK
+  GENERAL
+}
+
+// ─── Models ───────────────────────────────────────────────────────────────────
+
+/// A system user — can be Admin, Technician, or Requester.
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  /// bcrypt-hashed password — never stored in plain text
+  password  String
+  role      UserRole @default(REQUESTER)
+  isActive  Boolean  @default(true)
+  phone     String?
+  avatarUrl String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  maintenanceRequests    MaintenanceRequest[]
+  /// Work orders assigned to this user (Technician role)
+  assignedWorkOrders     WorkOrder[]              @relation("AssignedTechnician")
+  /// Work orders created by this user (Admin role)
+  createdWorkOrders      WorkOrder[]              @relation("WorkOrderCreator")
+  workOrderStatusChanges WorkOrderStatusHistory[]
+  workOrderNotes         WorkOrderNote[]
+  notifications          Notification[]
+  auditLogs              AuditLog[]
+  attachments            Attachment[]
+
+  @@index([email])
+  @@index([role])
+  @@map("users")
+}
+
+/// Physical location in the campus hierarchy: Campus > Building > Floor > Room.
+/// Self-referential via parentId to represent the tree.
+model Location {
+  id        String       @id @default(cuid())
+  name      String
+  type      LocationType
+  /// Points to parent location (null for top-level Campus nodes)
+  parentId  String?
+  parent    Location?    @relation("LocationHierarchy", fields: [parentId], references: [id])
+  children  Location[]   @relation("LocationHierarchy")
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  assets              Asset[]
+  maintenanceRequests MaintenanceRequest[]
+
+  @@index([parentId])
+  @@map("locations")
+}
+
+/// Asset category — supports optional parent for hierarchical categorisation.
+model Category {
+  id          String     @id @default(cuid())
+  name        String     @unique
+  description String?
+  /// Optional parent category for sub-categorisation
+  parentId    String?
+  parent      Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children    Category[] @relation("CategoryHierarchy")
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  assets Asset[]
+
+  @@index([parentId])
+  @@map("categories")
+}
+
+/// A physical asset (equipment, fixture, etc.) on campus.
+model Asset {
+  id             String      @id @default(cuid())
+  /// Human-readable unique code, e.g. "AC-LAB-001"
+  assetCode      String      @unique
+  name           String
+  categoryId     String
+  category       Category    @relation(fields: [categoryId], references: [id])
+  locationId     String
+  location       Location    @relation(fields: [locationId], references: [id])
+  manufacturer   String?
+  /// Manufacturer serial number — unique when present
+  serialNo       String?     @unique
+  purchaseDate   DateTime?
+  warrantyExpiry DateTime?
+  status         AssetStatus @default(ACTIVE)
+  /// URL/path to asset photo stored in /uploads
+  photoUrl       String?
+  /// URL/path to generated QR code PNG stored in /uploads
+  qrCodeUrl      String?
+  notes          String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  maintenanceRequests MaintenanceRequest[]
+  workOrders          WorkOrder[]
+  pmSchedules         PMSchedule[]
+
+  @@index([categoryId])
+  @@index([locationId])
+  @@index([status])
+  @@map("assets")
+}
+
+/// A maintenance fault or issue reported by a Requester.
+model MaintenanceRequest {
+  id              String        @id @default(cuid())
+  requesterId     String
+  requester       User          @relation(fields: [requesterId], references: [id])
+  /// Asset the fault is associated with (optional — may be location-only)
+  assetId         String?
+  asset           Asset?        @relation(fields: [assetId], references: [id])
+  /// Location the fault is at (optional if asset is specified)
+  locationId      String?
+  location        Location?     @relation(fields: [locationId], references: [id])
+  description     String
+  priority        Priority      @default(MEDIUM)
+  status          RequestStatus @default(PENDING)
+  /// Mandatory when status = REJECTED
+  rejectionReason String?
+  photoUrl        String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  /// A request converts to at most one work order on approval (1:0..1)
+  workOrder   WorkOrder?
+
+  @@index([requesterId])
+  @@index([status])
+  @@index([assetId])
+  @@map("maintenance_requests")
+}
+
+/// A formal task assigned to a Technician to perform maintenance.
+model WorkOrder {
+  id          String  @id @default(cuid())
+  title       String
+  description String
+
+  /// FK to the originating maintenance request (null if created manually or by PM)
+  maintenanceRequestId String?             @unique
+  maintenanceRequest   MaintenanceRequest? @relation(fields: [maintenanceRequestId], references: [id])
+
+  /// Asset being maintained (may be null for general/location WOs)
+  assetId String?
+  asset   Asset?  @relation(fields: [assetId], references: [id])
+
+  priority Priority        @default(MEDIUM)
+  status   WorkOrderStatus @default(OPEN)
+
+  /// Assigned Technician (null until assigned)
+  assigneeId String?
+  assignee   User?   @relation("AssignedTechnician", fields: [assigneeId], references: [id])
+
+  /// Admin who created this WO
+  createdById String
+  createdBy   User   @relation("WorkOrderCreator", fields: [createdById], references: [id])
+
+  dueDate       DateTime?
+  estimatedCost Float?
+  /// Set to SUM of parts cost + manual overrides; stored for reporting flexibility
+  actualCost    Float?
+  /// Total technician hours logged
+  timeSpent     Float?
+
+  /// FK to PM schedule that generated this WO (null for reactive/manual WOs)
+  pmScheduleId String?
+  pmSchedule   PMSchedule? @relation(fields: [pmScheduleId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  statusHistory WorkOrderStatusHistory[]
+  notes         WorkOrderNote[]
+  parts         WorkOrderPart[]
+
+  @@index([assigneeId])
+  @@index([status])
+  @@index([priority])
+  @@index([assetId])
+  @@index([dueDate])
+  @@index([pmScheduleId])
+  @@map("work_orders")
+}
+
+/// Immutable record of every status transition on a Work Order.
+model WorkOrderStatusHistory {
+  id          String          @id @default(cuid())
+  workOrderId String
+  workOrder   WorkOrder       @relation(fields: [workOrderId], references: [id])
+  /// Null only for the initial OPEN entry (no prior state)
+  fromStatus  WorkOrderStatus?
+  toStatus    WorkOrderStatus
+  changedById String
+  changedBy   User            @relation(fields: [changedById], references: [id])
+  /// Optional explanation (required for ON_HOLD)
+  reason      String?
+  createdAt   DateTime        @default(now())
+
+  @@index([workOrderId])
+  @@map("work_order_status_history")
+}
+
+/// A note or comment logged by a Technician or Admin on a Work Order.
+model WorkOrderNote {
+  id          String    @id @default(cuid())
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id])
+  authorId    String
+  author      User      @relation(fields: [authorId], references: [id])
+  content     String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([workOrderId])
+  @@map("work_order_notes")
+}
+
+/// A preventive maintenance schedule for an asset with time-based recurrence.
+model PMSchedule {
+  id              String    @id @default(cuid())
+  name            String
+  assetId         String
+  asset           Asset     @relation(fields: [assetId], references: [id])
+  /// Recurrence interval in days (e.g. 30 = monthly)
+  frequencyDays   Int
+  /// Timestamp of the last WO generated by this schedule
+  lastGeneratedAt DateTime?
+  /// Next date a WO should be generated
+  nextDueDate     DateTime
+  isActive        Boolean   @default(true)
+  description     String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  checklistItems PMChecklistItem[]
+  workOrders     WorkOrder[]
+
+  @@index([assetId])
+  @@index([nextDueDate])
+  @@index([isActive])
+  @@map("pm_schedules")
+}
+
+/// A single inspection/maintenance step within a PM schedule checklist.
+model PMChecklistItem {
+  id          String     @id @default(cuid())
+  scheduleId  String
+  schedule    PMSchedule @relation(fields: [scheduleId], references: [id])
+  description String
+  /// Display order within the checklist
+  order       Int        @default(0)
+
+  @@index([scheduleId])
+  @@map("pm_checklist_items")
+}
+
+/// A parts supplier (vendor) used for inventory procurement.
+model Supplier {
+  id          String   @id @default(cuid())
+  name        String
+  contactName String?
+  email       String?
+  phone       String?
+  address     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  parts Part[]
+
+  @@map("suppliers")
+}
+
+/// A spare part or consumable in the inventory catalogue.
+model Part {
+  id           String    @id @default(cuid())
+  /// Human-readable unique code, e.g. "PRT-FILTER-001"
+  partCode     String    @unique
+  name         String
+  description  String?
+  /// Current stock quantity — decremented on WO part use
+  stockQty     Int       @default(0)
+  /// Alert threshold — flag as low-stock when stockQty <= reorderLevel
+  reorderLevel Int       @default(5)
+  unitCost     Float
+  supplierId   String?
+  supplier     Supplier? @relation(fields: [supplierId], references: [id])
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  workOrderParts WorkOrderPart[]
+
+  @@index([supplierId])
+  @@index([stockQty])
+  @@map("parts")
+}
+
+/// Junction table linking a Work Order to the Parts used, with a cost snapshot.
+/// DELIBERATE DENORMALISATION: unitCostAtTime captures the part's price at the
+/// time of use — independent of future price changes in Part.unitCost — to ensure
+/// historical cost accuracy in reports (3NF is preserved; this is an audit field).
+model WorkOrderPart {
+  id             String    @id @default(cuid())
+  workOrderId    String
+  workOrder      WorkOrder @relation(fields: [workOrderId], references: [id])
+  partId         String
+  part           Part      @relation(fields: [partId], references: [id])
+  quantityUsed   Int
+  /// Part price snapshot at time of use (not updated if Part.unitCost changes later)
+  unitCostAtTime Float
+  createdAt      DateTime  @default(now())
+
+  @@unique([workOrderId, partId])
+  @@index([workOrderId])
+  @@index([partId])
+  @@map("work_order_parts")
+}
+
+/// An in-app or email notification for a user.
+model Notification {
+  id            String           @id @default(cuid())
+  userId        String
+  user          User             @relation(fields: [userId], references: [id])
+  type          NotificationType
+  title         String
+  message       String
+  isRead        Boolean          @default(false)
+  /// ID of the entity this notification relates to (WO, request, part, etc.)
+  referenceId   String?
+  /// Type string of the related entity, e.g. "WORK_ORDER", "PART"
+  referenceType String?
+  createdAt     DateTime         @default(now())
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+/// Immutable audit trail — records every significant action in the system.
+/// userId is nullable to capture system/scheduler actions with no human actor.
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  /// Action verb, e.g. "CREATE", "UPDATE", "DELETE", "APPROVE", "REJECT"
+  action     String
+  /// Entity type name, e.g. "Asset", "WorkOrder"
+  entityType String
+  /// ID of the affected entity
+  entityId   String?
+  /// JSON diff or additional context (before/after values)
+  details    Json?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+/// A file attachment associated with any entity via polymorphic (entityType, entityId).
+/// NOTE: No DB-level FK constraint on entityId — this is a pragmatic trade-off
+/// accepted because Prisma does not support multi-target polymorphic FKs. Application
+/// layer enforces referential validity. entityType values: ASSET, WORK_ORDER,
+/// MAINTENANCE_REQUEST.
+model Attachment {
+  id           String   @id @default(cuid())
+  /// Discriminator: "ASSET" | "WORK_ORDER" | "MAINTENANCE_REQUEST"
+  entityType   String
+  /// ID of the related entity — no DB FK (see note above)
+  entityId     String
+  fileName     String
+  /// Relative path under /uploads
+  fileUrl      String
+  fileSize     Int
+  mimeType     String
+  uploadedById String
+  uploadedBy   User     @relation(fields: [uploadedById], references: [id])
+  createdAt    DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([uploadedById])
+  @@map("attachments")
+}

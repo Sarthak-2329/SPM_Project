@@ -1,0 +1,46 @@
+# Dependencies (regenerable)
+node_modules/
+client/node_modules/
+server/node_modules/
+
+# Production build outputs (regenerable)
+client/dist/
+server/dist/
+dist/
+build/
+.vite/
+
+# Environment and secrets (never commit)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+server/.env
+client/.env
+
+# Runtime upload storage (keep directories, ignore uploaded binary files)
+server/uploads/assets/*
+!server/uploads/assets/.gitkeep
+server/uploads/qrcodes/*
+!server/uploads/qrcodes/.gitkeep
+
+# Logs and coverage
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+coverage/
+.nyc_output/
+
+# IDE and OS metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Submission packaging & internal quarantine
+_not_for_submission/
+submission/
