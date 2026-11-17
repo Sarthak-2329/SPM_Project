@@ -23,7 +23,9 @@ const app = express();
 
 // ─── Security & Utility Middleware ────────────────────────────────────────────
 app.use(helmet({ crossOriginResourcePolicy: false })); // allow cross-origin assets (e.g. uploaded images, QR codes)
-app.use(cors({ origin: env.CORS_ORIGIN || '*' }));
+const rawOrigin = env.CORS_ORIGIN || '*';
+const allowedOrigin = rawOrigin === '*' ? '*' : rawOrigin.replace(/\/+$/, '');
+app.use(cors({ origin: allowedOrigin, credentials: true }));
 if (env.NODE_ENV !== 'test') {
   app.use(morgan(env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 }
