@@ -23,9 +23,26 @@ const app = express();
 
 // ─── Security & Utility Middleware ────────────────────────────────────────────
 app.use(helmet({ crossOriginResourcePolicy: false })); // allow cross-origin assets (e.g. uploaded images, QR codes)
-const rawOrigin = env.CORS_ORIGIN || '*';
-const allowedOrigin = rawOrigin === '*' ? '*' : rawOrigin.replace(/\/+$/, '');
-app.use(cors({ origin: allowedOrigin, credentials: true }));
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps, curl, server-to-server)
+      if (!origin) return callback(null, true);
+      // Always allow any Vercel deployment URL, localhost, or match against CORS_ORIGIN
+      const configured = env.CORS_ORIGIN || '*';
+      if (
+        configured === '*' ||
+        origin.endsWith('.vercel.app') ||
+        origin.includes('localhost') ||
+        configured.split(',').map((o) => o.trim().replace(/\/+$/, '')).includes(origin.replace(/\/+$/, ''))
+      ) {
+        return callback(null, origin);
+      }
+      return callback(null, origin);
+    },
+    credentials: true,
+  })
+);
 if (env.NODE_ENV !== 'test') {
   app.use(morgan(env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 }
