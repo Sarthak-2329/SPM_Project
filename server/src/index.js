@@ -36,6 +36,19 @@ app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 // ─── API Routes ───────────────────────────────────────────────────────────────
 app.use('/api', routes);
 
+// ─── Serve Built Frontend in Production (if client/dist exists) ───────────────
+const fs = require('fs');
+const clientDistPath = path.join(__dirname, '..', '..', 'client', 'dist');
+if (fs.existsSync(clientDistPath)) {
+  app.use(express.static(clientDistPath));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) {
+      return next();
+    }
+    res.sendFile(path.join(clientDistPath, 'index.html'));
+  });
+}
+
 // ─── Global Error Handler (must be last) ─────────────────────────────────────
 app.use(errorHandler);
 
