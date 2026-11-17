@@ -1,5 +1,15 @@
 'use strict';
 
+const path = require('path');
+const dotenv = require('dotenv');
+
+// Load environment variables from .env.local and .env across server and root directories
+dotenv.config({ path: path.resolve(__dirname, '../../../.env.local') });
+dotenv.config({ path: path.resolve(__dirname, '../../.env.local') });
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+dotenv.config();
+
 /**
  * Environment configuration loader.
  * Validates that all required env vars are present at startup.
