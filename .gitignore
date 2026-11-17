@@ -17,6 +17,7 @@ build/
 .env.test.local
 .env.production.local
 server/.env
+server/.env.local
 client/.env
 
 # Runtime upload storage (keep directories, ignore uploaded binary files)
@@ -44,3 +45,4 @@ Thumbs.db
 # Submission packaging & internal quarantine
 _not_for_submission/
 submission/
+.neon
